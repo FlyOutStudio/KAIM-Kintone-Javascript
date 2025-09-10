@@ -213,6 +213,13 @@
         // 全レコードを取得
         getAllRecords().then(records => {
             CONFIG.log('取得したレコード数', records.length);
+            
+            // デバッグ用：最初のレコードの構造を確認
+            if (records.length > 0) {
+                CONFIG.log('最初のレコードの構造', records[0]);
+                CONFIG.log('$idの値', records[0].$id);
+            }
+            
             updateProgressDisplay(0, records.length, '処理を開始しています...');
             
             // レコードを順次処理
@@ -274,7 +281,7 @@
         }
         
         const currentRecord = records[index];
-        const recordId = currentRecord.$id.value;
+        const recordId = currentRecord.$id?.value || currentRecord.$id || index;
         
         CONFIG.log(`レコード処理開始: ID=${recordId} (${index + 1}/${records.length})`);
         updateProgressDisplay(index + 1, records.length, `レコード ${index + 1}/${records.length} を処理中...`);
@@ -314,7 +321,7 @@
      * 単一レコードの処理
      */
     function processSingleRecord(currentRecord, pastRecords, index, allRecords) {
-        const recordId = currentRecord.$id.value;
+        const recordId = currentRecord.$id?.value || currentRecord.$id || index;
         
         try {
             // 最新価格情報を抽出
