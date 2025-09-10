@@ -124,14 +124,26 @@
             // 現在の画面を判定して処理を分岐
             const currentUrl = window.location.href;
             
-            if (currentUrl.includes('/show')) {
-                // 詳細画面の場合
+            // Kintoneの画面判定を改善
+            if (currentUrl.includes('/show') || currentUrl.includes('/edit')) {
+                // 詳細画面・編集画面の場合
                 handleDetailPageProcess();
-            } else if (currentUrl.includes('/index')) {
-                // 一覧画面の場合
-                handleIndexPageProcess();
             } else {
-                throw new Error('対応していない画面です');
+                // その他の場合（一覧画面含む）は詳細画面の処理を試す
+                // レコード情報が取得できない場合は一覧画面として処理
+                try {
+                    const testRecord = kintone.app.record.get();
+                    if (testRecord && testRecord.record) {
+                        // レコード情報が取得できる場合は詳細画面として処理
+                        handleDetailPageProcess();
+                    } else {
+                        // レコード情報が取得できない場合は一覧画面として処理
+                        handleIndexPageProcess();
+                    }
+                } catch (e) {
+                    // kintone.app.record.get()でエラーが発生した場合は一覧画面
+                    handleIndexPageProcess();
+                }
             }
             
         } catch (error) {
