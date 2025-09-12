@@ -117,12 +117,53 @@
             if (headerSpace) {
                 headerSpace.appendChild(button);
                 CONFIG.log('ボタンを正常に配置しました');
+                // ボタンの高さ/位置を周囲に合わせて調整
+                setTimeout(adjustButtonMetrics, 0);
+                window.addEventListener('resize', adjustButtonMetrics, { passive: true });
             } else {
                 CONFIG.error('ボタン配置場所が見つかりません');
             }
             
         } catch (error) {
             CONFIG.error('ボタン作成中にエラーが発生', error);
+        }
+    }
+
+    /**
+     * ヘッダの実高さに合わせてボタンの高さ/行間/揃えを調整
+     */
+    function adjustButtonMetrics() {
+        try {
+            const btn = document.getElementById(CONFIG.UI.BUTTON_ID);
+            if (!btn) return;
+            const header = (kintone.app.getHeaderMenuSpaceElement && kintone.app.getHeaderMenuSpaceElement()) || btn.parentElement;
+            if (!header) return;
+
+            // 近傍の十分な高さを持つコンテナを探索
+            let container = header;
+            for (let i = 0; i < 5 && container && container.clientHeight < 28; i++) {
+                container = container.parentElement;
+            }
+            const h = container && container.clientHeight ? container.clientHeight : 36;
+
+            // 見た目が揃うように box-sizing で高さ厳守し、中央寄せ
+            btn.style.boxSizing = 'border-box';
+            btn.style.display = 'inline-flex';
+            btn.style.alignItems = 'center';
+            btn.style.verticalAlign = 'middle';
+            btn.style.height = h + 'px';
+            btn.style.lineHeight = h + 'px';
+            // 高さ固定時は上下パディングは0にし、左右のみ
+            btn.style.paddingTop = '0px';
+            btn.style.paddingBottom = '0px';
+            if (!btn.style.paddingLeft) btn.style.paddingLeft = '16px';
+            if (!btn.style.paddingRight) btn.style.paddingRight = '16px';
+            // 余白を少しだけ（左に12px）
+            btn.style.marginTop = '0px';
+            btn.style.marginBottom = '0px';
+            if (!btn.style.marginLeft) btn.style.marginLeft = '12px';
+        } catch (e) {
+            CONFIG.error('ボタン高さ調整中にエラーが発生', e);
         }
     }
     
@@ -546,154 +587,7 @@
         }
     }
     
-    /**
-     * 進捗表示を作成
-     */
-    function createProgressDisplay() {
-        CONFIG.log('進捗表示を作成中');
-        
-        try {
-            // 既存の進捗表示があれば削除
-            const existingProgress = document.getElementById('priceUpdateProgress');
-            if (existingProgress) {
-                existingProgress.remove();
-            }
-            
-            // 進捗表示コンテナを作成
-            const progressContainer = document.createElement('div');
-            progressContainer.id = 'priceUpdateProgress';
-            progressContainer.style.cssText = `
-                position: fixed;
-                top: 50%;
-                left: 50%;
-                transform: translate(-50%, -50%);
-                background: white;
-                border: 2px solid #3498db;
-                border-radius: 8px;
-                padding: 20px;
-                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-                z-index: 10000;
-                min-width: 300px;
-                text-align: center;
-                font-family: Arial, sans-serif;
-            `;
-            
-            // タイトル
-            const title = document.createElement('h3');
-            title.textContent = 'バッチ処理による一括更新中';
-            title.style.cssText = 'margin: 0 0 15px 0; color: #333;';
-            
-            // プログレスバー
-            const progressBar = document.createElement('div');
-            progressBar.id = 'progressBar';
-            progressBar.style.cssText = `
-                width: 100%;
-                height: 20px;
-                background-color: #f0f0f0;
-                border-radius: 10px;
-                overflow: hidden;
-                margin: 10px 0;
-            `;
-            
-            const progressFill = document.createElement('div');
-            progressFill.id = 'progressFill';
-            progressFill.style.cssText = `
-                height: 100%;
-                background-color: #3498db;
-                width: 0%;
-                transition: width 0.3s ease;
-            `;
-            progressBar.appendChild(progressFill);
-            
-            // 進捗テキスト
-            const progressText = document.createElement('div');
-            progressText.id = 'progressText';
-            progressText.textContent = '準備中...';
-            progressText.style.cssText = 'margin: 10px 0; color: #666;';
-            
-            // パーセント表示
-            const progressPercent = document.createElement('div');
-            progressPercent.id = 'progressPercent';
-            progressPercent.textContent = '0%';
-            progressPercent.style.cssText = 'font-weight: bold; color: #3498db; font-size: 18px;';
-            
-            // キャンセルボタン
-            const cancelButton = document.createElement('button');
-            cancelButton.textContent = 'キャンセル';
-            cancelButton.style.cssText = `
-                margin-top: 15px;
-                padding: 8px 16px;
-                background-color: #e74c3c;
-                color: white;
-                border: none;
-                border-radius: 4px;
-                cursor: pointer;
-            `;
-            cancelButton.onclick = function() {
-                if (confirm('処理を中断しますか？')) {
-                    hideProgressDisplay();
-                    resetButton();
-                    showInfoMessage('処理が中断されました');
-                }
-            };
-            
-            // 要素を組み立て
-            progressContainer.appendChild(title);
-            progressContainer.appendChild(progressPercent);
-            progressContainer.appendChild(progressBar);
-            progressContainer.appendChild(progressText);
-            progressContainer.appendChild(cancelButton);
-            
-            // ページに追加
-            document.body.appendChild(progressContainer);
-            
-            CONFIG.log('進捗表示を作成しました');
-            
-        } catch (error) {
-            CONFIG.error('進捗表示作成中にエラーが発生', error);
-        }
-    }
     
-    /**
-     * 進捗表示を更新
-     * @param {number} current - 現在の処理数
-     * @param {number} total - 総処理数
-     * @param {string} message - 表示メッセージ
-     */
-    function updateProgressDisplay(current, total, message) {
-        try {
-            const progressFill = document.getElementById('progressFill');
-            const progressText = document.getElementById('progressText');
-            const progressPercent = document.getElementById('progressPercent');
-            
-            if (progressFill && progressText && progressPercent) {
-                const percentage = total > 0 ? Math.round((current / total) * 100) : 0;
-                
-                progressFill.style.width = percentage + '%';
-                progressText.textContent = message || `${current}/${total} 件処理中...`;
-                progressPercent.textContent = percentage + '%';
-                
-                CONFIG.log(`進捗更新: ${current}/${total} (${percentage}%)`);
-            }
-        } catch (error) {
-            CONFIG.error('進捗表示更新中にエラーが発生', error);
-        }
-    }
-    
-    /**
-     * 進捗表示を非表示
-     */
-    function hideProgressDisplay() {
-        try {
-            const progressContainer = document.getElementById('priceUpdateProgress');
-            if (progressContainer) {
-                progressContainer.remove();
-                CONFIG.log('進捗表示を非表示にしました');
-            }
-        } catch (error) {
-            CONFIG.error('進捗表示非表示中にエラーが発生', error);
-        }
-    }
     
     CONFIG.log('メインスクリプトが読み込まれました');
     
