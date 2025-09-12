@@ -139,21 +139,124 @@ const PriceLogic = {
         const conditions = [];
         
         // 同一商品の定義に基づいて検索条件を構築
-        CONFIG.SEARCH.PRODUCT_MATCH_FIELDS.forEach(fieldName => {
-            const fieldValue = currentRecord[fieldName]?.value;
-            if (fieldValue) {
-                conditions.push(`${fieldName} = "${fieldValue}"`);
+        // PRODUCT_MATCH_FIELDS は「フィールドコード」または CONFIG.FIELDS のキー名を受け付ける
+        CONFIG.SEARCH.PRODUCT_MATCH_FIELDS.forEach(fieldKeyOrCode => {
+            const fieldCode = (CONFIG.FIELDS && CONFIG.FIELDS[fieldKeyOrCode]) ? CONFIG.FIELDS[fieldKeyOrCode] : fieldKeyOrCode;
+            const fieldObj = currentRecord[fieldCode];
+            const fieldValue = fieldObj && typeof fieldObj === 'object' ? fieldObj.value : undefined;
+            const text = (typeof fieldValue === 'string') ? fieldValue.trim() : fieldValue;
+            if (text !== undefined && text !== null && String(text).trim() !== '') {
+                const escapedValue = this.escapeQueryValue(String(text));
+                // フィールドコードは引用しない（値のみダブルクォート）
+                conditions.push(`${fieldCode} = "${escapedValue}"`);
             }
         });
         
-        // 期間での絞り込み
+        // 商品の検索条件がない場合は検索しない
+        if (conditions.length === 0) {
+            CONFIG.log('商品名が空のため検索をスキップ');
+            return null;
+        }
+        
+        // 期間での絞り込み（日付が有効な場合のみ）
         const searchDate = new Date();
         searchDate.setDate(searchDate.getDate() - CONFIG.SEARCH.SEARCH_DAYS_BACK);
-        const dateString = searchDate.toISOString().split('T')[0];
-        conditions.push(`${CONFIG.FIELDS.DELIVERY_DATE} >= "${dateString}T00:00:00Z"`);
+        
+        // 日付が有効かチェック
+        if (!isNaN(searchDate.getTime())) {
+            const dateString = searchDate.toISOString().split('T')[0];
+            // 納品日が日付型想定のため YYYY-MM-DD を使用
+            conditions.push(`${CONFIG.FIELDS.DELIVERY_DATE} >= "${dateString}"`);
+        } else {
+            CONFIG.log('日付計算でエラーが発生したため、日付条件をスキップ');
+        }
         
         const query = conditions.join(' and ');
+        
+        // 最終的にクエリが空でないかチェック
+        if (!query || query.trim() === '') {
+            CONFIG.log('最終的なクエリが空のため検索をスキップ');
+            return null;
+        }
+        
         CONFIG.log('検索クエリ構築完了', query);
         return query;
+    },
+
+    /**
+     * フォールバック付きの検索クエリ配列を構築する（厳密→緩和）
+     * @param {Object} currentRecord
+     * @returns {string[]} クエリ配列（優先順）
+     */
+    buildSearchQueries: function(currentRecord) {
+        // CONFIG.SEARCH.PRODUCT_MATCH_FIELDS をコードに解決し、値があるものだけ残す
+        const codes = [];
+        CONFIG.SEARCH.PRODUCT_MATCH_FIELDS.forEach(keyOrCode => {
+            const code = (CONFIG.FIELDS && CONFIG.FIELDS[keyOrCode]) ? CONFIG.FIELDS[keyOrCode] : keyOrCode;
+            const val = currentRecord[code] && currentRecord[code].value;
+            if (val !== undefined && val !== null && String(val).trim() !== '') {
+                codes.push(code);
+            }
+        });
+
+        const productCode = CONFIG.FIELDS && CONFIG.FIELDS.PRODUCT_NAME;
+        const hasProduct = productCode && codes.includes(productCode);
+        const orderedCodes = hasProduct
+            ? [productCode].concat(codes.filter(c => c !== productCode))
+            : codes;
+
+        // 日付条件
+        const searchDate = new Date();
+        searchDate.setDate(searchDate.getDate() - CONFIG.SEARCH.SEARCH_DAYS_BACK);
+        const dateString = !isNaN(searchDate.getTime()) ? searchDate.toISOString().split('T')[0] : null;
+
+        const make = (useCodes) => {
+            const conds = [];
+            useCodes.forEach(code => {
+                const v = currentRecord[code] && currentRecord[code].value;
+                if (v !== undefined && v !== null && String(v).trim() !== '') {
+                    conds.push(`${code} = "${this.escapeQueryValue(String(v).trim())}"`);
+                }
+            });
+            if (dateString) conds.push(`${CONFIG.FIELDS.DELIVERY_DATE} >= "${dateString}"`);
+            return conds.length ? conds.join(' and ') : null;
+        };
+
+        const queries = [];
+        // 1) 厳密（全条件）
+        if (orderedCodes.length) {
+            const q1 = make(orderedCodes);
+            if (q1) queries.push(q1);
+        }
+        // 2) 商品名＋他1（順に）
+        if (hasProduct && orderedCodes.length >= 2) {
+            for (let i = 1; i < orderedCodes.length; i++) {
+                const q = make([productCode, orderedCodes[i]]);
+                if (q && !queries.includes(q)) queries.push(q);
+            }
+        }
+        // 3) 商品名のみ
+        if (hasProduct) {
+            const qMin = make([productCode]);
+            if (qMin && !queries.includes(qMin)) queries.push(qMin);
+        }
+
+        CONFIG.log('フォールバック付きクエリ構築', queries);
+        return queries;
+    },
+    
+    /**
+     * クエリ値の特殊文字をエスケープする
+     * @param {string} value - エスケープする値
+     * @returns {string} エスケープされた値
+     */
+    escapeQueryValue: function(value) {
+        if (!value) return '';
+        
+        // 文字列に変換
+        const strValue = String(value);
+        
+        // ダブルクォートをエスケープ
+        return strValue.replace(/"/g, '\\"');
     }
 };

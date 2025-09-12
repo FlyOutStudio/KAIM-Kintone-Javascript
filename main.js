@@ -28,23 +28,7 @@
         return event;
     });
     
-    /**
-     * レコード詳細画面表示時のイベントハンドラー（個別処理用）
-     */
-    kintone.events.on('app.record.detail.show', function(event) {
-        CONFIG.log('レコード詳細画面表示イベント発生');
-        
-        // 設定の検証
-        if (!CONFIG.validate()) {
-            CONFIG.error('設定が正しくありません');
-            return event;
-        }
-        
-        // 詳細画面でもボタンを配置
-        createPriceButton();
-        
-        return event;
-    });
+    // 仕様書では一覧画面のみのため、詳細画面のイベントハンドラーは削除
     
     /**
      * 価格取得ボタンを作成・配置する
@@ -79,20 +63,14 @@
             // クリックイベント
             button.addEventListener('click', handleButtonClick);
             
-            // ボタンを配置（画面に応じて配置場所を決定）
+            // ボタンを配置（一覧画面のヘッダー部分）
             let headerSpace = null;
             
-            // 一覧画面の場合
             try {
                 headerSpace = kintone.app.getHeaderMenuSpaceElement();
             } catch (e) {
-                // 詳細画面の場合
-                try {
-                    headerSpace = kintone.app.record.getHeaderMenuSpaceElement();
-                } catch (e2) {
-                    CONFIG.error('ボタン配置場所が見つかりません');
-                    return;
-                }
+                CONFIG.error('一覧画面のボタン配置場所が見つかりません');
+                return;
             }
             
             if (headerSpace) {
@@ -121,30 +99,8 @@
                 button.textContent = '取得中...';
             }
             
-            // 現在の画面を判定して処理を分岐
-            const currentUrl = window.location.href;
-            
-            // Kintoneの画面判定を改善
-            if (currentUrl.includes('/show') || currentUrl.includes('/edit')) {
-                // 詳細画面・編集画面の場合
-                handleDetailPageProcess();
-            } else {
-                // その他の場合（一覧画面含む）は詳細画面の処理を試す
-                // レコード情報が取得できない場合は一覧画面として処理
-                try {
-                    const testRecord = kintone.app.record.get();
-                    if (testRecord && testRecord.record) {
-                        // レコード情報が取得できる場合は詳細画面として処理
-                        handleDetailPageProcess();
-                    } else {
-                        // レコード情報が取得できない場合は一覧画面として処理
-                        handleIndexPageProcess();
-                    }
-                } catch (e) {
-                    // kintone.app.record.get()でエラーが発生した場合は一覧画面
-                    handleIndexPageProcess();
-                }
-            }
+            // 一覧画面での一括処理のみ実行
+            handleIndexPageProcess();
             
         } catch (error) {
             CONFIG.error('ボタンクリック処理中にエラーが発生', error);
@@ -153,30 +109,7 @@
         }
     }
     
-    /**
-     * 詳細画面での処理
-     */
-    function handleDetailPageProcess() {
-        CONFIG.log('詳細画面での価格取得処理開始');
-        
-        try {
-            // 現在のレコード情報を取得
-            const currentRecord = kintone.app.record.get();
-            if (!currentRecord || !currentRecord.record) {
-                throw new Error('現在のレコード情報を取得できません');
-            }
-            
-            CONFIG.log('現在のレコード情報', currentRecord.record);
-            
-            // 過去データを検索・取得
-            searchPastRecords(currentRecord.record);
-            
-        } catch (error) {
-            CONFIG.error('詳細画面処理中にエラーが発生', error);
-            resetButton();
-            showErrorMessage('詳細画面処理中にエラーが発生しました: ' + error.message);
-        }
-    }
+    // 詳細画面での処理は仕様書にないため削除
     
     /**
      * 一覧画面での処理
@@ -186,7 +119,7 @@
         
         try {
             // ユーザーに確認
-            if (!confirm('全レコードの価格情報を一括更新しますか？\\n\\n処理に時間がかかる場合があります。')) {
+            if (!confirm('全レコードの価格情報を一括更新しますか？処理に時間がかかる場合があります。')) {
                 resetButton();
                 return;
             }
@@ -202,10 +135,10 @@
     }
     
     /**
-     * 一括更新処理
+     * 一括更新処理（バッチ処理版）
      */
     function processBulkUpdate() {
-        CONFIG.log('一括更新処理開始');
+        CONFIG.log('バッチ処理による一括更新開始');
         
         // プログレス表示を準備
         createProgressDisplay();
@@ -214,16 +147,26 @@
         getAllRecords().then(records => {
             CONFIG.log('取得したレコード数', records.length);
             
-            // デバッグ用：最初のレコードの構造を確認
-            if (records.length > 0) {
-                CONFIG.log('最初のレコードの構造', records[0]);
-                CONFIG.log('$idの値', records[0].$id);
+            if (records.length === 0) {
+                hideProgressDisplay();
+                resetButton();
+                showInfoMessage('処理対象のレコードがありません');
+                return;
             }
             
-            updateProgressDisplay(0, records.length, '処理を開始しています...');
+            updateProgressDisplay(0, records.length, 'バッチ処理を開始しています...');
             
-            // レコードを順次処理
-            processBulkRecords(records, 0);
+            // レコードをバッチ単位に分割
+            const BATCH_SIZE = CONFIG.BATCH.SIZE;
+            const batches = [];
+            for (let i = 0; i < records.length; i += BATCH_SIZE) {
+                batches.push(records.slice(i, i + BATCH_SIZE));
+            }
+            
+            CONFIG.log(`${records.length}件のレコードを${batches.length}個のバッチに分割`);
+            
+            // バッチを順次処理
+            processBatches(batches, 0, records.length);
             
         }).catch(error => {
             CONFIG.error('レコード取得でエラーが発生', error);
@@ -239,25 +182,14 @@
     function getAllRecords() {
         return new Promise((resolve, reject) => {
             CONFIG.log('全レコード取得開始');
-            
+
             const query = ''; // 全レコードを取得
-            const fields = [
-                CONFIG.FIELDS.CURRENT_PURCHASE_PRICE,
-                CONFIG.FIELDS.CURRENT_SELLING_PRICE,
-                CONFIG.FIELDS.SPECIAL_PRICE_CATEGORY,
-                CONFIG.FIELDS.DELIVERY_DATE,
-                CONFIG.FIELDS.PRODUCT_NAME,
-                CONFIG.FIELDS.STORE_NAME,
-                CONFIG.FIELDS.STORE_CODE,
-                CONFIG.FIELDS.PAST_LATEST_PURCHASE_PRICE,
-                CONFIG.FIELDS.PAST_LATEST_SELLING_PRICE,
-                CONFIG.FIELDS.PRICE_CHANGE_CATEGORY
-            ];
-            
+
+            // 備考: fields を指定すると $id が返らない環境があるため fields は指定しない
+            //      これにより $id と レコード番号 の両方が確実に取得できる
             kintone.api(kintone.api.url('/k/v1/records', true), 'GET', {
                 app: CONFIG.APP_ID,
                 query: query,
-                fields: fields,
                 totalCount: true
             }, function(response) {
                 resolve(response.records);
@@ -268,69 +200,177 @@
     }
     
     /**
-     * レコードを順次処理
+     * バッチを順次処理
      */
-    function processBulkRecords(records, index) {
-        if (index >= records.length) {
-            // 全件処理完了
-            CONFIG.log('一括処理完了');
+    function processBatches(batches, batchIndex, totalRecords) {
+        if (batchIndex >= batches.length) {
+            // 全バッチ処理完了
+            CONFIG.log('バッチ処理完了');
             hideProgressDisplay();
             resetButton();
-            showSuccessMessage(`一括処理が完了しました。${records.length}件のレコードを処理しました。`);
+            showSuccessMessage(`バッチ処理が完了しました。${totalRecords}件のレコードを処理しました。\n\n※更新内容を確認するには、ページを再読み込み（F5キー）してください。`);
             return;
         }
         
-        const currentRecord = records[index];
-        const recordId = currentRecord.$id?.value || currentRecord.$id || index;
+        const currentBatch = batches[batchIndex];
+        const processedCount = batchIndex * CONFIG.BATCH.SIZE;
         
-        CONFIG.log(`レコード処理開始: ID=${recordId} (${index + 1}/${records.length})`);
-        updateProgressDisplay(index + 1, records.length, `レコード ${index + 1}/${records.length} を処理中...`);
+        CONFIG.log(`バッチ ${batchIndex + 1}/${batches.length} 処理開始 (${currentBatch.length}件)`);
+        updateProgressDisplay(processedCount, totalRecords, `バッチ ${batchIndex + 1}/${batches.length} を処理中... (${currentBatch.length}件)`);
         
-        // 現在のレコードの過去データを検索
-        const query = PriceLogic.buildSearchQuery(currentRecord);
+        // バッチ内の全レコードの過去データを並列で検索
+        const searchPromises = currentBatch.map(record => searchPastDataForRecord(record));
         
-        if (!query) {
-            // 検索条件が構築できない場合はスキップ
-            CONFIG.log(`レコード ${recordId} の検索条件が構築できないためスキップ`);
-            setTimeout(() => processBulkRecords(records, index + 1), 100);
-            return;
-        }
-        
-        // 過去レコードを検索
-        kintone.api(kintone.api.url('/k/v1/records', true), 'GET', {
-            app: CONFIG.APP_ID,
-            query: query + ` and $id != ${recordId}`, // 自分自身を除外
-            fields: [
-                CONFIG.FIELDS.CURRENT_PURCHASE_PRICE,
-                CONFIG.FIELDS.CURRENT_SELLING_PRICE,
-                CONFIG.FIELDS.SPECIAL_PRICE_CATEGORY,
-                CONFIG.FIELDS.DELIVERY_DATE
-            ]
-        }, function(response) {
-            // 成功時の処理
-            processSingleRecord(currentRecord, response.records, index, records);
-        }, function(error) {
-            // エラー時の処理
-            CONFIG.error(`レコード ${recordId} の検索でエラー`, error);
-            // エラーが発生してもスキップして次に進む
-            setTimeout(() => processBulkRecords(records, index + 1), 100);
+        Promise.all(searchPromises).then(results => {
+            // 更新データを準備
+            const updateRecords = [];
+            
+            results.forEach((result, index) => {
+                if (result && result.updateData) {
+                    updateRecords.push(result.updateData);
+                }
+            });
+            
+            if (updateRecords.length === 0) {
+                CONFIG.log(`バッチ ${batchIndex + 1} に更新対象レコードがありません`);
+                setTimeout(() => processBatches(batches, batchIndex + 1, totalRecords), 100);
+                return;
+            }
+            
+            // バッチでレコード更新
+            CONFIG.log(`バッチ ${batchIndex + 1}: ${updateRecords.length}件のレコードを一括更新`);
+            
+            kintone.api(kintone.api.url('/k/v1/records', true), 'PUT', {
+                app: CONFIG.APP_ID,
+                records: updateRecords
+            }, function(response) {
+                CONFIG.log(`バッチ ${batchIndex + 1} の更新完了`);
+                // 次のバッチを処理（API制限回避のため少し待機）
+                setTimeout(() => processBatches(batches, batchIndex + 1, totalRecords), CONFIG.BATCH.WAIT_TIME);
+            }, function(error) {
+                CONFIG.error(`バッチ ${batchIndex + 1} の更新でエラー`, error);
+                // エラーが発生しても次のバッチを処理
+                setTimeout(() => processBatches(batches, batchIndex + 1, totalRecords), CONFIG.BATCH.WAIT_TIME);
+            });
+            
+        }).catch(error => {
+            CONFIG.error(`バッチ ${batchIndex + 1} の検索処理でエラー`, error);
+            // エラーが発生しても次のバッチを処理
+            setTimeout(() => processBatches(batches, batchIndex + 1, totalRecords), CONFIG.BATCH.WAIT_TIME);
         });
     }
     
     /**
-     * 単一レコードの処理
+     * 単一レコードの過去データ検索
      */
-    function processSingleRecord(currentRecord, pastRecords, index, allRecords) {
-        const recordId = currentRecord.$id?.value || currentRecord.$id || index;
+    function searchPastDataForRecord(currentRecord) {
+        return new Promise((resolve) => {
+            // レコードIDの取得を改善
+            let recordId = null;
+            
+            if (currentRecord.$id && currentRecord.$id.value) {
+                recordId = currentRecord.$id.value;
+            } else if (currentRecord.$id) {
+                recordId = currentRecord.$id;
+            } else if (currentRecord.レコード番号 && currentRecord.レコード番号.value) {
+                recordId = currentRecord.レコード番号.value;
+            } else if (currentRecord['$id']) {
+                recordId = currentRecord['$id'];
+            }
+            
+            CONFIG.log(`レコードID取得結果: ${recordId}`, currentRecord);
+            
+            // レコードIDが取得できない場合は自分自身除外なしで検索
+            const skipSelfExclusion = !recordId;
+            
+            try {
+                // フォールバック付きの検索クエリを構築
+                const queries = (PriceLogic.buildSearchQueries && PriceLogic.buildSearchQueries(currentRecord))
+                    || [PriceLogic.buildSearchQuery(currentRecord)].filter(Boolean);
+
+                if (!queries || queries.length === 0) {
+                    CONFIG.log(`レコード ${recordId || 'ID不明'} の検索条件が構築できないためスキップ`);
+                    resolve(null);
+                    return;
+                }
+
+                // 順次クエリを試す
+                const tryQuery = (idx) => {
+                    if (idx >= queries.length) {
+                        resolve(null);
+                        return;
+                    }
+
+                    const q = queries[idx];
+                    if (!q || q.length > 2000) {
+                        CONFIG.log(`レコード ${recordId || 'ID不明'} のクエリが無効/長すぎるため次へ`, q);
+                        tryQuery(idx + 1);
+                        return;
+                    }
+
+                    const finalQuery = skipSelfExclusion ? q : q + ` and $id != ${recordId}`;
+                    CONFIG.log(`レコード ${recordId || 'ID不明'} の最終クエリ`, finalQuery);
+
+                    kintone.api(kintone.api.url('/k/v1/records', true), 'GET', {
+                        app: CONFIG.APP_ID,
+                        query: finalQuery,
+                        fields: [
+                            CONFIG.FIELDS.CURRENT_PURCHASE_PRICE,
+                            CONFIG.FIELDS.CURRENT_SELLING_PRICE,
+                            CONFIG.FIELDS.SPECIAL_PRICE_CATEGORY,
+                            CONFIG.FIELDS.DELIVERY_DATE
+                        ]
+                    }, function(response) {
+                        if (response && response.records && response.records.length > 0) {
+                            const result = processSingleRecordData(currentRecord, response.records);
+                            resolve(result);
+                        } else {
+                            CONFIG.log(`レコード ${recordId || 'ID不明'}: クエリ${idx + 1}/${queries.length} で過去データ0件、次を試行`);
+                            setTimeout(() => tryQuery(idx + 1), 50);
+                        }
+                    }, function(error) {
+                        CONFIG.error(`レコード ${recordId || 'ID不明'} の検索でエラー`, error);
+                        CONFIG.error(`エラーとなったクエリ: ${finalQuery}`);
+                        if (error.errors && error.errors.query) {
+                            CONFIG.error('詳細なクエリエラー:', error.errors.query);
+                        }
+                        setTimeout(() => tryQuery(idx + 1), 50);
+                    });
+                };
+
+                tryQuery(0);
+
+            } catch (error) {
+                CONFIG.error(`レコード ${recordId} の処理中にエラー`, error);
+                resolve(null);
+            }
+        });
+    }
+    
+    /**
+     * 単一レコードのデータ処理
+     */
+    function processSingleRecordData(currentRecord, pastRecords) {
+        // レコードIDの取得を改善
+        let recordId = null;
+        
+        if (currentRecord.$id && currentRecord.$id.value) {
+            recordId = currentRecord.$id.value;
+        } else if (currentRecord.$id) {
+            recordId = currentRecord.$id;
+        } else if (currentRecord.レコード番号 && currentRecord.レコード番号.value) {
+            recordId = currentRecord.レコード番号.value;
+        } else if (currentRecord['$id']) {
+            recordId = currentRecord['$id'];
+        }
         
         try {
             // 最新価格情報を抽出
             const priceData = PriceLogic.extractLatestPrices(pastRecords);
             
             if (!priceData.latestPurchasePrice && !priceData.latestSellingPrice) {
-                CONFIG.log(`レコード ${recordId} の過去データが見つからないためスキップ`);
-                setTimeout(() => processBulkRecords(allRecords, index + 1), 100);
-                return;
+                CONFIG.log(`レコード ${recordId || 'ID不明'} の過去データが見つからないためスキップ`);
+                return null;
             }
             
             // 価格変動区分を判定
@@ -343,12 +383,28 @@
             // 追加更新処理
             const additionalUpdates = PriceLogic.getAdditionalUpdates(changeCategory, priceData);
             
-            // 更新データを構築
+            // レコードIDが取得できない場合は更新をスキップ
+            if (!recordId) {
+                CONFIG.log('レコードIDが取得できないため更新をスキップ');
+                return null;
+            }
+            
+            // 更新データを構築（id が無い場合はレコード番号を updateKey で使用）
             const updateData = {
-                app: CONFIG.APP_ID,
-                id: recordId,
                 record: {}
             };
+
+            if (recordId) {
+                updateData.id = recordId;
+            } else if (currentRecord['レコード番号'] && currentRecord['レコード番号'].value) {
+                updateData.updateKey = {
+                    field: 'レコード番号',
+                    value: currentRecord['レコード番号'].value
+                };
+            } else {
+                CONFIG.log('id もレコード番号も取得できないため更新対象から除外');
+                return null;
+            }
             
             // 過去最新価格を設定
             if (priceData.latestPurchasePrice) {
@@ -373,186 +429,16 @@
                 updateData.record[fieldCode] = additionalUpdates[fieldCode];
             });
             
-            // レコードを更新
-            kintone.api(kintone.api.url('/k/v1/record', true), 'PUT', updateData, 
-                function(response) {
-                    CONFIG.log(`レコード ${recordId} の更新完了`);
-                    // 次のレコードを処理（100ms待機してAPI制限を回避）
-                    setTimeout(() => processBulkRecords(allRecords, index + 1), 100);
-                },
-                function(error) {
-                    CONFIG.error(`レコード ${recordId} の更新でエラー`, error);
-                    // エラーが発生してもスキップして次に進む
-                    setTimeout(() => processBulkRecords(allRecords, index + 1), 100);
-                }
-            );
+            CONFIG.log('更新データ作成', updateData);
+            return { updateData: updateData };
             
         } catch (error) {
-            CONFIG.error(`レコード ${recordId} の処理中にエラー`, error);
-            // エラーが発生してもスキップして次に進む
-            setTimeout(() => processBulkRecords(allRecords, index + 1), 100);
+            CONFIG.error(`レコード ${recordId || 'ID不明'} のデータ処理中にエラー`, error);
+            return null;
         }
     }
     
-    /**
-     * 過去レコードを検索・取得する
-     * @param {Object} currentRecord - 現在のレコード
-     */
-    function searchPastRecords(currentRecord) {
-        CONFIG.log('過去レコード検索開始');
-        
-        try {
-            // 検索クエリを構築
-            const query = PriceLogic.buildSearchQuery(currentRecord);
-            
-            if (!query) {
-                throw new Error('検索クエリを構築できませんでした');
-            }
-            
-            // 検索に必要なフィールドを指定
-            const fields = [
-                CONFIG.FIELDS.CURRENT_PURCHASE_PRICE,
-                CONFIG.FIELDS.CURRENT_SELLING_PRICE,
-                CONFIG.FIELDS.SPECIAL_PRICE_CATEGORY,
-                CONFIG.FIELDS.DELIVERY_DATE,
-                CONFIG.FIELDS.PRODUCT_NAME,
-                CONFIG.FIELDS.STORE_NAME,
-                CONFIG.FIELDS.STORE_CODE
-            ];
-            
-            // kintone.api()を使用してレコードを取得
-            kintone.api(kintone.api.url('/k/v1/records', true), 'GET', {
-                app: CONFIG.APP_ID,
-                query: query,
-                fields: fields,
-                totalCount: true
-            }, function(response) {
-                // 成功時の処理
-                handleSearchSuccess(response, currentRecord);
-            }, function(error) {
-                // エラー時の処理
-                handleSearchError(error);
-            });
-            
-        } catch (error) {
-            CONFIG.error('過去レコード検索中にエラーが発生', error);
-            resetButton();
-            showErrorMessage('検索処理中にエラーが発生しました: ' + error.message);
-        }
-    }
-    
-    /**
-     * 検索成功時の処理
-     * @param {Object} response - API応答
-     * @param {Object} currentRecord - 現在のレコード
-     */
-    function handleSearchSuccess(response, currentRecord) {
-        CONFIG.log('過去レコード検索成功', {
-            totalCount: response.totalCount,
-            recordCount: response.records.length
-        });
-        
-        try {
-            // 最新価格情報を抽出
-            const priceData = PriceLogic.extractLatestPrices(response.records);
-            
-            if (!priceData.latestPurchasePrice && !priceData.latestSellingPrice) {
-                showInfoMessage('過去の価格データが見つかりませんでした');
-                resetButton();
-                return;
-            }
-            
-            // 価格変動区分を判定
-            const currentPurchasePrice = currentRecord[CONFIG.FIELDS.CURRENT_PURCHASE_PRICE]?.value;
-            
-            const changeCategory = PriceLogic.determinePriceChangeCategory(
-                currentPurchasePrice,
-                priceData.latestPurchasePrice
-            );
-            
-            // 追加更新処理
-            const additionalUpdates = PriceLogic.getAdditionalUpdates(changeCategory, priceData);
-            
-            // レコードを更新
-            updateRecord(priceData, changeCategory, additionalUpdates);
-            
-        } catch (error) {
-            CONFIG.error('検索成功処理中にエラーが発生', error);
-            resetButton();
-            showErrorMessage('データ処理中にエラーが発生しました: ' + error.message);
-        }
-    }
-    
-    /**
-     * 検索エラー時の処理
-     * @param {Object} error - エラー情報
-     */
-    function handleSearchError(error) {
-        CONFIG.error('過去レコード検索でエラーが発生', error);
-        resetButton();
-        
-        let errorMessage = 'データ検索中にエラーが発生しました';
-        if (error && error.message) {
-            errorMessage += ': ' + error.message;
-        }
-        
-        showErrorMessage(errorMessage);
-    }
-    
-    /**
-     * レコードを更新する
-     * @param {Object} priceData - 価格データ
-     * @param {string} changeCategory - 価格変動区分
-     * @param {Object} additionalUpdates - 追加更新内容
-     */
-    function updateRecord(priceData, changeCategory, additionalUpdates = {}) {
-        CONFIG.log('レコード更新開始');
-        
-        try {
-            const currentRecord = kintone.app.record.get();
-            const updatedRecord = { ...currentRecord };
-            
-            // 過去最新価格を設定
-            if (priceData.latestPurchasePrice) {
-                updatedRecord.record[CONFIG.FIELDS.PAST_LATEST_PURCHASE_PRICE] = {
-                    value: priceData.latestPurchasePrice
-                };
-            }
-            
-            if (priceData.latestSellingPrice) {
-                updatedRecord.record[CONFIG.FIELDS.PAST_LATEST_SELLING_PRICE] = {
-                    value: priceData.latestSellingPrice
-                };
-            }
-            
-            // 価格変動区分を設定
-            updatedRecord.record[CONFIG.FIELDS.PRICE_CHANGE_CATEGORY] = {
-                value: changeCategory
-            };
-            
-            // 追加更新内容を適用
-            Object.keys(additionalUpdates).forEach(fieldCode => {
-                updatedRecord.record[fieldCode] = additionalUpdates[fieldCode];
-            });
-            
-            // レコードを更新
-            kintone.app.record.set(updatedRecord);
-            
-            CONFIG.log('レコード更新完了');
-            showSuccessMessage('価格情報を正常に取得・更新しました');
-            
-            // 値上がりの場合は行の色を変更
-            if (changeCategory === CONFIG.PRICE_CHANGE_OPTIONS.INCREASED) {
-                applyRowHighlight();
-            }
-            
-        } catch (error) {
-            CONFIG.error('レコード更新中にエラーが発生', error);
-            showErrorMessage('レコード更新中にエラーが発生しました: ' + error.message);
-        } finally {
-            resetButton();
-        }
-    }
+    // 詳細画面関連の関数は仕様書にないため削除
     
     /**
      * 値上がり時の行ハイライト
@@ -650,7 +536,7 @@
             
             // タイトル
             const title = document.createElement('h3');
-            title.textContent = '価格情報一括更新中';
+            title.textContent = 'バッチ処理による一括更新中';
             title.style.cssText = 'margin: 0 0 15px 0; color: #333;';
             
             // プログレスバー
