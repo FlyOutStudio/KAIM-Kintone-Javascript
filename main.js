@@ -9,6 +9,47 @@
     
     // アプリID設定（実際の値に変更してください）
     CONFIG.APP_ID = kintone.app.getId();
+
+    /**
+     * ステータスチップ（ヘッダ右上）
+     */
+    function ensureStatusChip() {
+        const id = 'kaim-status-chip';
+        let chip = document.getElementById(id);
+        if (!chip) {
+            chip = document.createElement('span');
+            chip.id = id;
+            chip.style.cssText = [
+                'margin-left:8px',
+                'padding:2px 8px',
+                'border-radius:12px',
+                'font-size:12px',
+                'background:#eef3fb',
+                'color:#2c5aa0',
+                'vertical-align:middle'
+            ].join(';');
+            const header = kintone.app.getHeaderMenuSpaceElement && kintone.app.getHeaderMenuSpaceElement();
+            if (header) header.appendChild(chip);
+        }
+        return chip;
+    }
+
+    function setStatus(text, type) {
+        const palette = {
+            info:  { bg: '#eef3fb', fg: '#2c5aa0' },
+            success: { bg: '#e6f7eb', fg: '#1b6e3c' },
+            error: { bg: '#fdecea', fg: '#8e2d22' }
+        }[type || 'info'];
+        const chip = ensureStatusChip();
+        chip.textContent = text;
+        chip.style.background = palette.bg;
+        chip.style.color = palette.fg;
+    }
+
+    function clearStatus() {
+        const chip = document.getElementById('kaim-status-chip');
+        if (chip) chip.remove();
+    }
     
     /**
      * 一覧画面表示時のイベントハンドラー
@@ -99,6 +140,8 @@
                 button.textContent = '取得中...';
             }
             
+            setStatus('処理中…', 'info');
+            
             // 一覧画面での一括処理のみ実行
             handleIndexPageProcess();
             
@@ -129,6 +172,7 @@
             
         } catch (error) {
             CONFIG.error('一覧画面処理中にエラーが発生', error);
+            setStatus('エラー', 'error');
             resetButton();
             showErrorMessage('一覧画面処理中にエラーが発生しました: ' + error.message);
         }
@@ -140,21 +184,19 @@
     function processBulkUpdate() {
         CONFIG.log('バッチ処理による一括更新開始');
         
-        // プログレス表示を準備
-        createProgressDisplay();
+        // ステータスチップで進捗状態を表示
+        setStatus('処理中…', 'info');
         
         // 全レコードを取得
         getAllRecords().then(records => {
             CONFIG.log('取得したレコード数', records.length);
             
             if (records.length === 0) {
-                hideProgressDisplay();
+                setStatus('完了', 'success');
                 resetButton();
                 showInfoMessage('処理対象のレコードがありません');
                 return;
             }
-            
-            updateProgressDisplay(0, records.length, 'バッチ処理を開始しています...');
             
             // レコードをバッチ単位に分割
             const BATCH_SIZE = CONFIG.BATCH.SIZE;
@@ -170,7 +212,7 @@
             
         }).catch(error => {
             CONFIG.error('レコード取得でエラーが発生', error);
-            hideProgressDisplay();
+            setStatus('エラー', 'error');
             resetButton();
             showErrorMessage('レコード取得でエラーが発生しました: ' + error.message);
         });
@@ -206,7 +248,7 @@
         if (batchIndex >= batches.length) {
             // 全バッチ処理完了
             CONFIG.log('バッチ処理完了');
-            hideProgressDisplay();
+            setStatus('完了', 'success');
             resetButton();
             showSuccessMessage(`バッチ処理が完了しました。${totalRecords}件のレコードを処理しました。\n\n※更新内容を確認するには、ページを再読み込み（F5キー）してください。`);
             return;
@@ -216,7 +258,7 @@
         const processedCount = batchIndex * CONFIG.BATCH.SIZE;
         
         CONFIG.log(`バッチ ${batchIndex + 1}/${batches.length} 処理開始 (${currentBatch.length}件)`);
-        updateProgressDisplay(processedCount, totalRecords, `バッチ ${batchIndex + 1}/${batches.length} を処理中... (${currentBatch.length}件)`);
+        setStatus('処理中…', 'info');
         
         // バッチ内の全レコードの過去データを並列で検索
         const searchPromises = currentBatch.map(record => searchPastDataForRecord(record));
@@ -249,12 +291,14 @@
                 setTimeout(() => processBatches(batches, batchIndex + 1, totalRecords), CONFIG.BATCH.WAIT_TIME);
             }, function(error) {
                 CONFIG.error(`バッチ ${batchIndex + 1} の更新でエラー`, error);
+                setStatus('エラー', 'error');
                 // エラーが発生しても次のバッチを処理
                 setTimeout(() => processBatches(batches, batchIndex + 1, totalRecords), CONFIG.BATCH.WAIT_TIME);
             });
             
         }).catch(error => {
             CONFIG.error(`バッチ ${batchIndex + 1} の検索処理でエラー`, error);
+            setStatus('エラー', 'error');
             // エラーが発生しても次のバッチを処理
             setTimeout(() => processBatches(batches, batchIndex + 1, totalRecords), CONFIG.BATCH.WAIT_TIME);
         });
